@@ -65,20 +65,30 @@ export async function POST(req: Request) {
     const file = formData.get('file') as File
     if (!file) return Response.json({ error: 'Fichier manquant' }, { status: 400 })
 
+    if (file.size > 14 * 1024 * 1024) {
+      return Response.json({ error: 'Fichier trop volumineux (max 14 Mo)' }, { status: 400 })
+    }
+
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
     const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
 
     if (ext === 'pdf') {
       const data = await pdfParse(buffer)
-      const text = data.text?.slice(0, 12000) ?? ''
+      const text = (data.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 12000)
+      if (!text) {
+        return Response.json({ error: 'PDF non lisible — le document est scanné ou protégé. Exportez en Excel/CSV ou prenez une photo (JPG/PNG).' }, { status: 422 })
+      }
       messageContent = `${buildSystemPrompt(posts ?? [])}\n\nContenu PDF:\n---\n${text}\n---`
     } else if (['xlsx', 'xls', 'ods'].includes(ext)) {
       const wb = XLSX.read(buffer, { type: 'buffer' })
       const sheets = wb.SheetNames.map(n => `=== ${n} ===\n${XLSX.utils.sheet_to_csv(wb.Sheets[n])}`).join('\n\n')
-      messageContent = `${buildSystemPrompt(posts ?? [])}\n\nContenu Excel:\n---\n${sheets.slice(0, 12000)}\n---`
+      const content = sheets.replace(/,+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 12000)
+      messageContent = `${buildSystemPrompt(posts ?? [])}\n\nContenu Excel:\n---\n${content}\n---`
     } else if (['csv', 'txt'].includes(ext)) {
-      messageContent = `${buildSystemPrompt(posts ?? [])}\n\nContenu:\n---\n${buffer.toString('utf-8').slice(0, 12000)}\n---`
+      let text = buffer.toString('utf-8')
+      if (text.includes('�')) text = buffer.toString('latin1')
+      messageContent = `${buildSystemPrompt(posts ?? [])}\n\nContenu:\n---\n${text.slice(0, 12000)}\n---`
     } else if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
       const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }
       const base64 = buffer.toString('base64')
@@ -89,7 +99,7 @@ export async function POST(req: Request) {
         { type: 'text', text: buildSystemPrompt(posts ?? []) },
       ]
     } else {
-      return Response.json({ error: `Format non supporté : .${ext}` }, { status: 400 })
+      return Response.json({ error: `Format non supporté : .${ext} — utilisez PDF, Excel (.xlsx), CSV ou image (JPG/PNG)` }, { status: 400 })
     }
   }
 

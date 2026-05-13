@@ -62,7 +62,8 @@ export async function POST(req: Request) {
   const postDesc = (formData.get('post_desc') as string) ?? ''
   const instructions = (formData.get('instructions') as string) ?? ''
   const file = formData.get('file') as File | null
-  const year = new Date().getFullYear()
+  const yearParam = parseInt(formData.get('study_year') as string)
+  const year = isNaN(yearParam) ? new Date().getFullYear() : yearParam
   const validPeriods = getValidPeriods(year)
 
   const client = new Mistral({ apiKey })

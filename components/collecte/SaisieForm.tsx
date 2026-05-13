@@ -187,6 +187,7 @@ export function SaisieForm({ sites, emissionPosts, defaultPostId, totalCo2e = 0,
       fd.append('post_name', post?.name ?? '')
       fd.append('post_scope', String(post?.scope ?? '3'))
       fd.append('post_desc', post?.description ?? '')
+      fd.append('study_year', String(yr))
 
       const res = await fetch('/api/import/fill', { method: 'POST', body: fd })
       if (!res.ok) {
@@ -202,8 +203,17 @@ export function SaisieForm({ sites, emissionPosts, defaultPostId, totalCo2e = 0,
       if (data.period) setPeriod(data.period)
       if (data.factor_query) {
         const cleanQuery = data.factor_query.replace(/\b(facteur|d'émission|emission|factor)\b/gi, '').replace(/\s+/g, ' ').trim()
-        setFactorQuery(cleanQuery || data.factor_query)
-        const factors = await searchEmissionFactors(cleanQuery || data.factor_query) as EmissionFactor[]
+        const query = cleanQuery || data.factor_query
+        setFactorQuery(query)
+        let factors = await searchEmissionFactors(query) as EmissionFactor[]
+        // Fallback: try each individual word if the full phrase matches nothing
+        if (!factors.length) {
+          const words = query.split(' ').filter(w => w.length > 3)
+          for (const word of words) {
+            factors = await searchEmissionFactors(word) as EmissionFactor[]
+            if (factors.length) break
+          }
+        }
         if (factors.length > 0) {
           setSelectedFactor(factors[0])
         }

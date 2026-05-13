@@ -7,7 +7,7 @@ import { SitesManager } from '@/components/admin/SitesManager'
 export default async function SitesPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/auth/login')
+  if (!user) redirect('/login')
 
   const { data: membership } = await supabase
     .from('organization_members')

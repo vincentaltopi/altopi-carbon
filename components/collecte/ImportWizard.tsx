@@ -30,7 +30,8 @@ type SpeechRecognitionInstance = {
   continuous: boolean
   interimResults: boolean
   onresult: ((ev: SpeechRecognitionEvent) => void) | null
-  onerror: (() => void) | null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onerror: ((ev: any) => void) | null
   onend: (() => void) | null
   start: () => void
   stop: () => void
@@ -87,7 +88,17 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
       const t = Array.from(ev.results).map((res: SpeechRecognitionResult) => res[0].transcript).join(' ')
       setTranscript(t)
     }
-    r.onerror = () => { setRecording(false) }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    r.onerror = (ev: any) => {
+      setRecording(false)
+      if (ev?.error === 'not-allowed') {
+        setError('Microphone refusé — autorisez l\'accès dans les paramètres de votre navigateur')
+      } else if (ev?.error === 'no-speech') {
+        setError('Aucune voix détectée — parlez plus fort et réessayez')
+      } else {
+        setError('Erreur microphone — vérifiez que votre micro est connecté et réessayez')
+      }
+    }
     r.onend = () => { setRecording(false) }
     recognitionRef.current = r
     r.start()

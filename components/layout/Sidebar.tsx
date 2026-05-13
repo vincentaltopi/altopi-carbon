@@ -146,7 +146,7 @@ function SidebarContent({ profile, onNavigate, completionPct = 0, pendingPosts =
         <div className="flex items-center gap-3">
           <Image src="/images/LOGO_ALTOPI.png" alt="Altopi" width={140} height={44} className="h-12 w-auto rounded-2xl" />
           <span className="text-gray-200 text-xl font-light">|</span>
-          <span className="text-gray-800 font-bold text-base tracking-wide">DENYS</span>
+          <span className="text-gray-800 font-bold text-base tracking-wide">Carbon</span>
         </div>
       </div>
 

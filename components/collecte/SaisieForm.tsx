@@ -19,7 +19,8 @@ type LocalSpeechRec = {
   interimResults: boolean
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onresult: ((ev: any) => void) | null
-  onerror: (() => void) | null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onerror: ((ev: any) => void) | null
   onend: (() => void) | null
   start: () => void
   stop: () => void
@@ -124,7 +125,7 @@ export function SaisieForm({ sites, emissionPosts, defaultPostId, totalCo2e = 0,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR: (new () => LocalSpeechRec) | undefined = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition
     if (!SR) {
-      showToast('error', 'Votre navigateur ne supporte pas la reconnaissance vocale')
+      showToast('error', 'Reconnaissance vocale non supportée — utilisez Chrome ou Edge')
       return
     }
     const rec = new SR()
@@ -134,7 +135,6 @@ export function SaisieForm({ sites, emissionPosts, defaultPostId, totalCo2e = 0,
     setInterimText('')
     rec.onresult = (ev) => {
       let interim = ''
-      // Only process new results starting from resultIndex
       const startIdx = ev.resultIndex ?? 0
       for (let i = startIdx; i < ev.results.length; i++) {
         const r = ev.results[i]
@@ -150,11 +150,29 @@ export function SaisieForm({ sites, emissionPosts, defaultPostId, totalCo2e = 0,
       }
       setInterimText(interim)
     }
-    rec.onerror = () => { setIsRecording(false); setInterimText('') }
-    rec.onend = () => { setIsRecording(false); setInterimText('') }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onerror = (ev: any) => {
+      setIsRecording(false)
+      setInterimText('')
+      if (ev?.error === 'not-allowed') {
+        showToast('error', 'Microphone refusé — autorisez l\'accès dans les paramètres Chrome')
+      } else if (ev?.error === 'no-speech') {
+        showToast('error', 'Aucune voix détectée — réessayez en parlant plus fort')
+      } else {
+        showToast('error', 'Erreur micro — vérifiez que votre microphone est connecté')
+      }
+    }
+    rec.onend = () => {
+      setIsRecording(false)
+      setInterimText('')
+    }
     recognitionRef.current = rec
-    rec.start()
-    setIsRecording(true)
+    try {
+      rec.start()
+      setIsRecording(true)
+    } catch {
+      showToast('error', 'Impossible de démarrer le microphone — réessayez')
+    }
   }, [isRecording, showToast])
 
   const handleAIFill = useCallback(async () => {

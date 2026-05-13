@@ -1,0 +1,154 @@
+{
+  "name": "Altopi Carbon — 01 Analyse IA Documents",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "altopi-analyze",
+        "responseMode": "responseNode",
+        "options": { "binaryData": true }
+      },
+      "id": "webhook-trigger",
+      "name": "📥 Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Vérifier la clé API n8n\nconst key = $input.first().json.headers?.['x-n8n-key'];\nif (key !== $env.N8N_API_KEY) {\n  throw new Error('Unauthorized');\n}\nreturn $input.all();"
+      },
+      "id": "auth-check",
+      "name": "🔐 Auth Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/emission_posts?select=id,name,scope,order_index,category&order=order_index",
+        "options": {},
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_ANON_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-posts",
+      "name": "📋 Get Emission Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('📥 Webhook Trigger').first().json.body;\nconst posts = $('📋 Get Emission Posts').first().json;\n\nconst postList = posts.map(p =>\n  `• [${p.id}] P${p.order_index} – ${p.name} (Scope ${p.scope})${p.category ? ' / ' + p.category : ''}`\n).join('\\n');\n\nconst systemPrompt = `Tu es un expert en comptabilité carbone BC2025/ADEME.\n\nAnalyse le contenu et extrait TOUTES les données d'activité générant des émissions GES.\n\nPostes disponibles:\n${postList}\n\nRéponds UNIQUEMENT avec ce JSON:\n{\"entries\":[{\"post_id\":\"UUID\",\"description\":\"desc fr\",\"quantity\":0.0,\"unit\":\"kWh\",\"co2e_kgCO2e\":null,\"factor_hint\":\"ADEME factor name\"}]}`;\n\nconst content = body.content || body.text || '';\nconst fileType = body.fileType || 'text';\n\nreturn [{ json: { systemPrompt, content, fileType, posts, body } }];"
+      },
+      "id": "build-prompt",
+      "name": "🧠 Build Mistral Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fileType }}",
+              "rightValue": "image",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "is-image",
+      "name": "🖼 Image ou Texte?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.MISTRAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"mistral-large-latest\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": {{ JSON.stringify($json.systemPrompt + \"\\n\\nContenu:\\n---\\n\" + $json.content + \"\\n---\") }}\n  }]\n}"
+      },
+      "id": "mistral-text",
+      "name": "🤖 Mistral (Texte)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.MISTRAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"pixtral-12b-2409\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": [\n      { \"type\": \"image_url\", \"image_url\": { \"url\": \"data:\" + $json.body.mimeType + \";base64,\" + $json.body.base64 } },\n      { \"type\": \"text\", \"text\": {{ JSON.stringify($json.systemPrompt) }} }\n    ]\n  }]\n}"
+      },
+      "id": "mistral-image",
+      "name": "🤖 Mistral (Image/Pixtral)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices?.[0]?.message?.content ?? '';\nconst posts = $('📋 Get Emission Posts').first().json;\n\nconst match = raw.match(/\\{[\\s\\S]*\\}/);\nlet parsed = { entries: [] };\ntry { parsed = JSON.parse(match?.[0] ?? '{\"entries\":[]}'); } catch {}\n\nconst validIds = new Set(posts.map(p => p.id));\nconst postMap = Object.fromEntries(posts.map(p => [p.id, p]));\n\nconst validated = (parsed.entries ?? [])\n  .filter(e => validIds.has(e.post_id))\n  .map(e => ({\n    ...e,\n    post_name: postMap[e.post_id]?.name ?? '',\n    post_scope: postMap[e.post_id]?.scope ?? '3',\n    confidence: e.quantity > 0 ? 0.85 : 0.5,\n  }));\n\nreturn [{ json: { entries: validated } }];"
+      },
+      "id": "parse-validate",
+      "name": "✅ Parse & Valider",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond",
+      "name": "📤 Répondre",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1780, 300]
+    }
+  ],
+  "connections": {
+    "📥 Webhook Trigger": { "main": [[{ "node": "🔐 Auth Check", "type": "main", "index": 0 }]] },
+    "🔐 Auth Check": { "main": [[{ "node": "📋 Get Emission Posts", "type": "main", "index": 0 }]] },
+    "📋 Get Emission Posts": { "main": [[{ "node": "🧠 Build Mistral Prompt", "type": "main", "index": 0 }]] },
+    "🧠 Build Mistral Prompt": { "main": [[{ "node": "🖼 Image ou Texte?", "type": "main", "index": 0 }]] },
+    "🖼 Image ou Texte?": {
+      "main": [
+        [{ "node": "🤖 Mistral (Image/Pixtral)", "type": "main", "index": 0 }],
+        [{ "node": "🤖 Mistral (Texte)", "type": "main", "index": 0 }]
+      ]
+    },
+    "🤖 Mistral (Texte)": { "main": [[{ "node": "✅ Parse & Valider", "type": "main", "index": 0 }]] },
+    "🤖 Mistral (Image/Pixtral)": { "main": [[{ "node": "✅ Parse & Valider", "type": "main", "index": 0 }]] },
+    "✅ Parse & Valider": { "main": [[{ "node": "📤 Répondre", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" }
+}

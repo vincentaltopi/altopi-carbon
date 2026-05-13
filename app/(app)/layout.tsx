@@ -21,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Compute real study stats for sidebar
   let completionPct = 0
   let pendingPosts = 0
+  let pendingValidation = 0
   let studyYear = new Date().getFullYear()
 
   if (orgId) {
@@ -32,13 +33,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const totalPosts = postCountRes.count ?? 0
     if (study) {
       studyYear = study.reference_year
-      const { data: acts } = await supabase
-        .from('activity_data')
-        .select('emission_post_id')
-        .eq('study_id', study.id)
-      const uniquePosts = new Set((acts ?? []).map(a => a.emission_post_id)).size
+      const [actsRes, pendingRes] = await Promise.all([
+        supabase.from('activity_data').select('emission_post_id').eq('study_id', study.id),
+        supabase.from('activity_data').select('id', { count: 'exact', head: true }).eq('study_id', study.id).eq('status', 'pending_review'),
+      ])
+      const uniquePosts = new Set((actsRes.data ?? []).map(a => a.emission_post_id)).size
       completionPct = totalPosts > 0 ? Math.round((uniquePosts / totalPosts) * 100) : 0
       pendingPosts = totalPosts - uniquePosts
+      pendingValidation = pendingRes.count ?? 0
     } else {
       pendingPosts = totalPosts
     }
@@ -60,6 +62,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         profile={userProfile}
         completionPct={completionPct}
         pendingPosts={pendingPosts}
+        pendingValidation={pendingValidation}
         studyYear={studyYear}
       />
       <main className="flex-1 overflow-y-auto bg-gray-50 pt-14 lg:pt-0">

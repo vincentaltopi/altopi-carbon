@@ -37,6 +37,16 @@ const navSections = [
     label: 'Analyse',
     items: [
       {
+        href: '/validation',
+        label: 'Validation IA',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ),
+      },
+      {
         href: '/resultats',
         label: 'Résultats & scopes',
         icon: (
@@ -105,6 +115,7 @@ interface SidebarProps {
   profile: UserProfile
   completionPct?: number
   pendingPosts?: number
+  pendingValidation?: number
   studyYear?: number
 }
 
@@ -112,7 +123,7 @@ interface SidebarContentProps extends SidebarProps {
   onNavigate?: () => void
 }
 
-function SidebarContent({ profile, onNavigate, completionPct = 0, pendingPosts = 0, studyYear }: SidebarContentProps) {
+function SidebarContent({ profile, onNavigate, completionPct = 0, pendingPosts = 0, pendingValidation = 0, studyYear }: SidebarContentProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
@@ -221,6 +232,11 @@ function SidebarContent({ profile, onNavigate, completionPct = 0, pendingPosts =
                       {pendingPosts}
                     </span>
                   )}
+                  {item.href === '/validation' && pendingValidation > 0 && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
+                      {pendingValidation}
+                    </span>
+                  )}
                 </Link>
               )
             })}
@@ -254,7 +270,7 @@ function SidebarContent({ profile, onNavigate, completionPct = 0, pendingPosts =
   )
 }
 
-export function Sidebar({ profile, completionPct = 0, pendingPosts = 0, studyYear }: SidebarProps) {
+export function Sidebar({ profile, completionPct = 0, pendingPosts = 0, pendingValidation = 0, studyYear }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const pathname = usePathname()
 
@@ -273,7 +289,7 @@ export function Sidebar({ profile, completionPct = 0, pendingPosts = 0, studyYea
       </button>
 
       <aside className="hidden lg:flex flex-col h-screen w-60 bg-white border-r border-gray-200 flex-shrink-0">
-        <SidebarContent profile={profile} completionPct={completionPct} pendingPosts={pendingPosts} studyYear={studyYear} />
+        <SidebarContent profile={profile} completionPct={completionPct} pendingPosts={pendingPosts} pendingValidation={pendingValidation} studyYear={studyYear} />
       </aside>
 
       {mobileOpen && (
@@ -285,7 +301,7 @@ export function Sidebar({ profile, completionPct = 0, pendingPosts = 0, studyYea
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <SidebarContent profile={profile} onNavigate={() => setMobileOpen(false)} completionPct={completionPct} pendingPosts={pendingPosts} studyYear={studyYear} />
+            <SidebarContent profile={profile} onNavigate={() => setMobileOpen(false)} completionPct={completionPct} pendingPosts={pendingPosts} pendingValidation={pendingValidation} studyYear={studyYear} />
           </aside>
         </div>
       )}

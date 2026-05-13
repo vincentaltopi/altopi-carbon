@@ -51,6 +51,37 @@ export async function POST(req: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Non authentifié' }, { status: 401 })
 
+  // ── Delegate to n8n if configured ────────────────────────────────────────
+  const n8nUrl = process.env.N8N_FILL_WEBHOOK
+  if (n8nUrl) {
+    const formData = await req.formData()
+    const fwd = new FormData()
+    const file = formData.get('file') as File | null
+    if (file) {
+      fwd.append('file', file)
+      fwd.append('hasFile', 'true')
+    } else {
+      fwd.append('hasFile', 'false')
+    }
+    for (const key of ['post_name', 'post_scope', 'post_desc', 'instructions', 'study_year']) {
+      const val = formData.get(key)
+      if (val) fwd.append(key, val as string)
+    }
+    fwd.append('user_id', user.id)
+
+    const n8nRes = await fetch(n8nUrl, {
+      method: 'POST',
+      headers: { 'x-n8n-key': process.env.N8N_API_KEY ?? '' },
+      body: fwd,
+    })
+    if (!n8nRes.ok) {
+      const err = await n8nRes.json().catch(() => ({}))
+      return Response.json({ error: err.error ?? 'Erreur n8n' }, { status: n8nRes.status })
+    }
+    return Response.json(await n8nRes.json())
+  }
+
+  // ── Direct Mistral fallback ───────────────────────────────────────────────
   const apiKey = process.env.MISTRAL_API_KEY
   if (!apiKey) {
     return Response.json({ error: 'MISTRAL_API_KEY non configurée dans .env.local' }, { status: 500 })

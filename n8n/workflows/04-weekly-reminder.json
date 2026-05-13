@@ -1,0 +1,114 @@
+{
+  "name": "Altopi Carbon — 04 Rappel Hebdomadaire Completion",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "daysOfTheWeek": [1], "triggerAtHour": 9 }] }
+      },
+      "id": "schedule",
+      "name": "⏰ Chaque Lundi 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/organization_members?select=user_id,role,organizations(id,name),profiles(email,full_name)&role=neq.viewer",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-members",
+      "name": "👥 Get Tous les membres",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/emission_posts?select=id,name,scope,order_index&order=scope,order_index",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_ANON_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-all-posts",
+      "name": "📋 Get Tous les postes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/studies?select=id,organization_id,reference_year,status&status=eq.collecting&order=reference_year.desc",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-studies",
+      "name": "📊 Get Bilans en cours",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/activity_data?select=emission_post_id,study_id&status=neq.pending_review",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-activity",
+      "name": "📈 Get Données saisies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const members = $('👥 Get Tous les membres').first().json;\nconst allPosts = $('📋 Get Tous les postes').first().json;\nconst studies = $('📊 Get Bilans en cours').first().json;\nconst activities = $('📈 Get Données saisies').first().json;\n\n// Build: which posts have data per study\nconst studyData = {};\n(activities || []).forEach(a => {\n  if (!studyData[a.study_id]) studyData[a.study_id] = new Set();\n  studyData[a.study_id].add(a.emission_post_id);\n});\n\n// Map: org_id → study\nconst orgStudy = {};\n(studies || []).forEach(s => { orgStudy[s.organization_id] = s; });\n\n// Build email list per member\nconst emails = [];\nconst seenEmails = new Set();\n\n(members || []).forEach(m => {\n  const email = m.profiles?.email;\n  const orgId = m.organizations?.id;\n  const orgName = m.organizations?.name;\n  const study = orgStudy[orgId];\n  if (!email || !study || seenEmails.has(email)) return;\n  seenEmails.add(email);\n\n  const filledPosts = studyData[study.id] || new Set();\n  const emptyPosts = allPosts.filter(p => !filledPosts.has(p.id));\n  const completionPct = Math.round((filledPosts.size / allPosts.length) * 100);\n\n  if (completionPct >= 100) return; // Already complete, no reminder\n\n  emails.push({\n    to: email,\n    name: m.profiles?.full_name || email.split('@')[0],\n    orgName,\n    year: study.reference_year,\n    completionPct,\n    filledCount: filledPosts.size,\n    totalCount: allPosts.length,\n    emptyPosts: emptyPosts.slice(0, 5).map(p => ({ name: p.name, scope: p.scope })),\n    moreCount: Math.max(0, emptyPosts.length - 5),\n  });\n});\n\nreturn emails.map(e => ({ json: e }));"
+      },
+      "id": "compute-reminders",
+      "name": "🧮 Calculer rappels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "bilan@altopi.eco",
+        "toEmail": "={{ $json.to }}",
+        "subject": "📊 Votre bilan {{ $json.year }} est à {{ $json.completionPct }}% — {{ $json.emptyPosts.length + $json.moreCount }} postes manquants",
+        "emailFormat": "html",
+        "message": "=<div style=\"font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #1f2937;\">\n  <div style=\"background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 30px; border-radius: 16px; margin-bottom: 24px;\">\n    <p style=\"color: #9ca3af; font-size: 12px; margin: 0 0 8px;\">ALTOPI CARBON · BILAN {{ $json.year }}</p>\n    <h1 style=\"color: white; margin: 0; font-size: 28px;\">{{ $json.completionPct }}%</h1>\n    <p style=\"color: #4ade80; margin: 4px 0 0; font-size: 14px;\">{{ $json.filledCount }}/{{ $json.totalCount }} postes renseignés</p>\n  </div>\n  \n  <p>Bonjour <strong>{{ $json.name }}</strong>,</p>\n  <p>Le bilan carbone <strong>{{ $json.year }}</strong> de <strong>{{ $json.orgName }}</strong> est en cours. Voici ce qu'il reste à saisir :</p>\n  \n  <div style=\"background: #fef3c7; border: 1px solid #f59e0b; border-radius: 12px; padding: 16px; margin: 20px 0;\">\n    <p style=\"font-weight: bold; margin: 0 0 12px; color: #92400e;\">⚠️ Postes sans données :</p>\n    {{ $json.emptyPosts.map(p => `<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #fde68a;\"><span style=\"background: ${p.scope === '1' ? '#fee2e2' : p.scope === '2' ? '#fef9c3' : '#dbeafe'}; color: ${p.scope === '1' ? '#b91c1c' : p.scope === '2' ? '#92400e' : '#1d4ed8'}; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: bold;\">S${p.scope}</span><span style=\"font-size: 13px;\">${p.name}</span></div>`).join('') }}\n    {{ $json.moreCount > 0 ? `<p style=\"color: #92400e; font-size: 12px; margin: 8px 0 0;\">...et ${$json.moreCount} autre(s) poste(s)</p>` : '' }}\n  </div>\n  \n  <a href=\"{{ $env.APP_URL }}/collecte\" style=\"display: inline-block; background: #4f46e5; color: white; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 14px;\">Compléter le bilan →</a>\n  \n  <p style=\"color: #9ca3af; font-size: 11px; margin-top: 32px;\">Vous recevez cet email car vous êtes contributeur sur Altopi Carbon. <a href=\"{{ $env.APP_URL }}\">Se déconnecter des rappels</a></p>\n</div>"
+      },
+      "id": "send-reminder",
+      "name": "📨 Envoyer rappel personnalisé",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1560, 300],
+      "credentials": { "smtp": { "id": "SMTP_CRED_ID", "name": "SMTP Account" } }
+    }
+  ],
+  "connections": {
+    "⏰ Chaque Lundi 9h": { "main": [[{ "node": "👥 Get Tous les membres", "type": "main", "index": 0 }]] },
+    "👥 Get Tous les membres": { "main": [[{ "node": "📋 Get Tous les postes", "type": "main", "index": 0 }]] },
+    "📋 Get Tous les postes": { "main": [[{ "node": "📊 Get Bilans en cours", "type": "main", "index": 0 }]] },
+    "📊 Get Bilans en cours": { "main": [[{ "node": "📈 Get Données saisies", "type": "main", "index": 0 }]] },
+    "📈 Get Données saisies": { "main": [[{ "node": "🧮 Calculer rappels", "type": "main", "index": 0 }]] },
+    "🧮 Calculer rappels": { "main": [[{ "node": "📨 Envoyer rappel personnalisé", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

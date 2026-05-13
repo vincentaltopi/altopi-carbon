@@ -1,0 +1,114 @@
+{
+  "name": "Altopi Carbon — 05 Rapport Mensuel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "months", "triggerAtDayOfMonth": 1, "triggerAtHour": 8 }] }
+      },
+      "id": "schedule",
+      "name": "📅 1er du mois 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/studies?select=id,organization_id,reference_year,status,organizations(id,name,sector)&status=eq.collecting&order=reference_year.desc",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-studies",
+      "name": "📊 Get Bilans actifs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/activity_data?select=emission_post_id,study_id,co2e_calculated,status,created_at",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-activity",
+      "name": "📈 Get Toutes les données",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/emission_posts?select=id,name,scope,order_index",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_ANON_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-posts",
+      "name": "📋 Get Postes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/organization_members?select=user_id,role,organization_id,profiles(email,full_name)&role=eq.admin",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-admins",
+      "name": "👤 Get Admins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const studies = $('📊 Get Bilans actifs').first().json;\nconst activities = $('📈 Get Toutes les données').first().json;\nconst posts = $('📋 Get Postes').first().json;\nconst admins = $('👤 Get Admins').first().json;\n\nconst totalPosts = posts.length;\nconst now = new Date();\nconst monthName = now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });\n\n// Map: study_id → { filledIds, pendingCount, validatedCount, totalCO2 }\nconst studyStats = {};\n(activities || []).forEach(a => {\n  if (!studyStats[a.study_id]) {\n    studyStats[a.study_id] = { filledIds: new Set(), pendingCount: 0, validatedCount: 0, totalCO2: 0 };\n  }\n  studyStats[a.study_id].filledIds.add(a.emission_post_id);\n  if (a.status === 'pending_review') studyStats[a.study_id].pendingCount++;\n  else studyStats[a.study_id].validatedCount++;\n  studyStats[a.study_id].totalCO2 += a.co2e_calculated || 0;\n});\n\n// Map: org_id → admins\nconst orgAdmins = {};\n(admins || []).forEach(a => {\n  if (!orgAdmins[a.organization_id]) orgAdmins[a.organization_id] = [];\n  if (a.profiles?.email) orgAdmins[a.organization_id].push(a.profiles);\n});\n\n// Build one email per org that has a study AND at least one admin\nconst emails = [];\n(studies || []).forEach(study => {\n  const org = study.organizations;\n  if (!org) return;\n  const adminsForOrg = orgAdmins[org.id] || [];\n  if (!adminsForOrg.length) return;\n\n  const stats = studyStats[study.id] || { filledIds: new Set(), pendingCount: 0, validatedCount: 0, totalCO2: 0 };\n  const filledCount = stats.filledIds.size;\n  const completionPct = Math.round((filledCount / totalPosts) * 100);\n  const totalCO2Tonnes = (stats.totalCO2 / 1000).toFixed(2);\n\n  // Scope breakdown\n  const scopeData = { '1': 0, '2': 0, '3': 0 };\n  (activities || []).filter(a => a.study_id === study.id).forEach(a => {\n    const post = posts.find(p => p.id === a.emission_post_id);\n    if (post) scopeData[post.scope] = (scopeData[post.scope] || 0) + (a.co2e_calculated || 0);\n  });\n\n  adminsForOrg.forEach(admin => {\n    emails.push({\n      to: admin.email,\n      name: admin.full_name || admin.email.split('@')[0],\n      orgName: org.name,\n      sector: org.sector,\n      year: study.reference_year,\n      monthName,\n      completionPct,\n      filledCount,\n      totalPosts,\n      pendingCount: stats.pendingCount,\n      validatedCount: stats.validatedCount,\n      totalCO2Tonnes,\n      scope1Tonnes: (scopeData['1'] / 1000).toFixed(2),\n      scope2Tonnes: (scopeData['2'] / 1000).toFixed(2),\n      scope3Tonnes: (scopeData['3'] / 1000).toFixed(2),\n      studyId: study.id,\n    });\n  });\n});\n\nreturn emails.map(e => ({ json: e }));"
+      },
+      "id": "compute-reports",
+      "name": "🧮 Calculer rapports",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "bilan@altopi.eco",
+        "toEmail": "={{ $json.to }}",
+        "subject": "📊 Rapport mensuel {{ $json.monthName }} — Bilan {{ $json.year }} de {{ $json.orgName }}",
+        "emailFormat": "html",
+        "message": "=<div style=\"font-family: sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;\">\n  <!-- Header -->\n  <div style=\"background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); padding: 36px 32px; border-radius: 20px; margin-bottom: 28px;\">\n    <p style=\"color: #9ca3af; font-size: 11px; margin: 0 0 6px; letter-spacing: 1.5px;\">ALTOPI CARBON · RAPPORT MENSUEL</p>\n    <h1 style=\"color: white; margin: 0 0 4px; font-size: 26px; font-weight: 700;\">{{ $json.orgName }}</h1>\n    <p style=\"color: #6ee7b7; margin: 0; font-size: 13px;\">Bilan {{ $json.year }} · {{ $json.monthName }}</p>\n  </div>\n\n  <p style=\"color: #374151; margin-bottom: 24px;\">Bonjour <strong>{{ $json.name }}</strong>, voici l'état mensuel de votre bilan carbone.</p>\n\n  <!-- Completion -->\n  <div style=\"background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 14px; padding: 20px; margin-bottom: 20px;\">\n    <p style=\"font-size: 13px; font-weight: 700; color: #374151; margin: 0 0 12px;\">Avancement global</p>\n    <div style=\"display: flex; align-items: center; gap: 16px;\">\n      <div style=\"width: 64px; height: 64px; border-radius: 50%; background: conic-gradient(#4f46e5 {{ $json.completionPct }}%, #e5e7eb {{ $json.completionPct }}%); display: flex; align-items: center; justify-content: center;\">\n        <div style=\"width: 48px; height: 48px; background: #f9fafb; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #4f46e5;\">{{ $json.completionPct }}%</div>\n      </div>\n      <div>\n        <p style=\"font-size: 22px; font-weight: 800; color: #4f46e5; margin: 0;\">{{ $json.filledCount }}/{{ $json.totalPosts }}</p>\n        <p style=\"font-size: 12px; color: #9ca3af; margin: 0;\">postes renseignés</p>\n      </div>\n      <div style=\"margin-left: auto; text-align: right;\">\n        <p style=\"font-size: 11px; color: #6b7280; margin: 0;\">En attente validation</p>\n        <p style=\"font-size: 18px; font-weight: 700; color: #f59e0b; margin: 0;\">{{ $json.pendingCount }}</p>\n      </div>\n    </div>\n  </div>\n\n  <!-- CO2 Summary -->\n  <div style=\"background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 14px; padding: 20px; margin-bottom: 20px;\">\n    <p style=\"font-size: 13px; font-weight: 700; color: #065f46; margin: 0 0 16px;\">Émissions calculées à ce jour</p>\n    <div style=\"display: flex; gap: 12px; flex-wrap: wrap;\">\n      <div style=\"flex: 1; min-width: 120px; text-align: center; background: white; border-radius: 10px; padding: 14px;\">\n        <p style=\"font-size: 20px; font-weight: 800; color: #1f2937; margin: 0;\">{{ $json.totalCO2Tonnes }}</p>\n        <p style=\"font-size: 10px; color: #9ca3af; margin: 2px 0 0;\">tCO₂e total</p>\n      </div>\n      <div style=\"flex: 1; min-width: 80px; text-align: center; background: #fee2e2; border-radius: 10px; padding: 14px;\">\n        <p style=\"font-size: 16px; font-weight: 700; color: #b91c1c; margin: 0;\">{{ $json.scope1Tonnes }}</p>\n        <p style=\"font-size: 10px; color: #b91c1c; margin: 2px 0 0;\">Scope 1</p>\n      </div>\n      <div style=\"flex: 1; min-width: 80px; text-align: center; background: #fef9c3; border-radius: 10px; padding: 14px;\">\n        <p style=\"font-size: 16px; font-weight: 700; color: #92400e; margin: 0;\">{{ $json.scope2Tonnes }}</p>\n        <p style=\"font-size: 10px; color: #92400e; margin: 2px 0 0;\">Scope 2</p>\n      </div>\n      <div style=\"flex: 1; min-width: 80px; text-align: center; background: #dbeafe; border-radius: 10px; padding: 14px;\">\n        <p style=\"font-size: 16px; font-weight: 700; color: #1d4ed8; margin: 0;\">{{ $json.scope3Tonnes }}</p>\n        <p style=\"font-size: 10px; color: #1d4ed8; margin: 2px 0 0;\">Scope 3</p>\n      </div>\n    </div>\n  </div>\n\n  <!-- Actions -->\n  <div style=\"display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px;\">\n    <a href=\"{{ $env.APP_URL }}/collecte\" style=\"flex: 1; min-width: 160px; display: inline-block; background: #4f46e5; color: white; padding: 14px 20px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 13px; text-align: center;\">Compléter le bilan →</a>\n    <a href=\"{{ $env.APP_URL }}/validation\" style=\"flex: 1; min-width: 160px; display: inline-block; background: #f59e0b; color: white; padding: 14px 20px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 13px; text-align: center;\">Valider données ({{ $json.pendingCount }}) →</a>\n    <a href=\"{{ $env.APP_URL }}/resultats\" style=\"flex: 1; min-width: 160px; display: inline-block; background: #10b981; color: white; padding: 14px 20px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 13px; text-align: center;\">Voir les résultats →</a>\n  </div>\n\n  <p style=\"color: #9ca3af; font-size: 11px; margin-top: 24px; border-top: 1px solid #f3f4f6; padding-top: 16px;\">Altopi Carbon · Rapport automatique mensuel · <a href=\"{{ $env.APP_URL }}\" style=\"color: #4f46e5;\">altopi-carbon.vercel.app</a></p>\n</div>"
+      },
+      "id": "send-report",
+      "name": "📨 Envoyer rapport mensuel",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1560, 300],
+      "credentials": { "smtp": { "id": "SMTP_CRED_ID", "name": "SMTP Account" } }
+    }
+  ],
+  "connections": {
+    "📅 1er du mois 8h": { "main": [[{ "node": "📊 Get Bilans actifs", "type": "main", "index": 0 }]] },
+    "📊 Get Bilans actifs": { "main": [[{ "node": "📈 Get Toutes les données", "type": "main", "index": 0 }]] },
+    "📈 Get Toutes les données": { "main": [[{ "node": "📋 Get Postes", "type": "main", "index": 0 }]] },
+    "📋 Get Postes": { "main": [[{ "node": "👤 Get Admins", "type": "main", "index": 0 }]] },
+    "👤 Get Admins": { "main": [[{ "node": "🧮 Calculer rapports", "type": "main", "index": 0 }]] },
+    "🧮 Calculer rapports": { "main": [[{ "node": "📨 Envoyer rapport mensuel", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

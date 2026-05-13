@@ -1,0 +1,225 @@
+{
+  "name": "Altopi Carbon — 02 Fill Poste IA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "altopi-fill",
+        "responseMode": "responseNode",
+        "options": { "binaryData": true }
+      },
+      "id": "webhook-trigger",
+      "name": "📥 Webhook Fill",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const key = $input.first().json.headers?.['x-n8n-key'];\nif (key !== $env.N8N_API_KEY) throw new Error('Unauthorized');\nreturn $input.all();"
+      },
+      "id": "auth-check",
+      "name": "🔐 Auth Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/emission_posts?select=id,name,scope,order_index,category,description&order=order_index",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_ANON_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-posts",
+      "name": "📋 Get Emission Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if there's a file to extract or just text/instructions\nconst body = $('📥 Webhook Fill').first().json.body;\nconst hasFile = body.hasFile === 'true' || body.hasFile === true;\nreturn [{ json: { body, hasFile } }];"
+      },
+      "id": "check-file",
+      "name": "🔍 A-t-on un fichier?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasFile }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "if-has-file",
+      "name": "📎 Fichier ou texte?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.APP_URL }}/api/n8n/extract",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-n8n-key", "value": "={{ $env.N8N_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "fileUrl", "value": "={{ $('📥 Webhook Fill').first().json.body.fileUrl }}" }
+          ]
+        }
+      },
+      "id": "extract-file",
+      "name": "📂 Extraire texte fichier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build prompt for text-only mode (instructions)\nconst body = $('📥 Webhook Fill').first().json.body;\nreturn [{ json: {\n  fileType: 'text',\n  text: body.instructions || body.content || '',\n  fileName: 'instructions.txt',\n} }];"
+      },
+      "id": "text-passthrough",
+      "name": "📝 Utiliser texte direct",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('📥 Webhook Fill').first().json.body;\nconst posts = $('📋 Get Emission Posts').first().json;\n\nlet extracted;\ntry { extracted = $('📂 Extraire texte fichier').first().json; } catch { extracted = null; }\nif (!extracted) extracted = $('📝 Utiliser texte direct').first().json;\n\nconst postName = body.post_name || '';\nconst postScope = body.post_scope || '3';\nconst postDesc = body.post_desc || '';\nconst instructions = body.instructions || '';\nconst yearParam = parseInt(body.study_year);\nconst year = isNaN(yearParam) ? new Date().getFullYear() : yearParam;\n\nconst VALID_UNITS = ['kWh','MWh','GJ','m³','L','tonne','kg','km','passager.km','tonne.km','unité','heure'];\nconst validPeriods = [\n  `Année ${year} complète`,\n  `T1 ${year} (Jan-Mar)`,\n  `T2 ${year} (Avr-Jun)`,\n  `T3 ${year} (Jul-Sep)`,\n  `T4 ${year} (Oct-Déc)`,\n];\n\nconst contentSection = extracted.fileType === 'image'\n  ? '(voir image ci-jointe)'\n  : (extracted.text || instructions || '').slice(0, 10000);\n\nconst prompt = `Tu es un expert en comptabilité carbone (méthode Bilan Carbone® BC2025 / ADEME).\n\nPoste cible : ${postName} (Scope ${postScope})${postDesc ? '\\nDescription : ' + postDesc : ''}\n${instructions ? '\\nInstructions : ' + instructions : ''}\n\nContenu du document :\n---\n${contentSection}\n---\n\nExtrais les informations pertinentes pour CE poste uniquement.\nRéponds UNIQUEMENT avec ce JSON strict (sans markdown, sans texte avant/après) :\n{\n  \"description\": \"Description courte et précise\",\n  \"quantity\": 0.0,\n  \"unit\": \"kWh\",\n  \"period\": \"${validPeriods[0]}\",\n  \"factor_query\": \"mots-clés recherche ADEME\"\n}\n\nContraintes :\n- unit : EXACTEMENT une de ces valeurs : ${VALID_UNITS.join(', ')}\n- period : EXACTEMENT une de ces valeurs : ${validPeriods.join(' | ')}\n- quantity : nombre décimal positif uniquement\n- description : max 120 caractères, factuelle\n- factor_query : 2-5 mots-clés pour chercher le bon facteur d'émission ADEME`;\n\nreturn [{ json: { prompt, extracted, validPeriods, VALID_UNITS, year } }];"
+      },
+      "id": "build-prompt",
+      "name": "🧠 Build Prompt Fill",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.extracted.fileType }}",
+              "rightValue": "image",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "is-image",
+      "name": "🖼 Image ou texte?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.MISTRAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"mistral-large-latest\",\n  \"messages\": [{\"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt) }}}]\n}"
+      },
+      "id": "mistral-text",
+      "name": "🤖 Mistral (Texte)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.MISTRAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"pixtral-12b-2409\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": [\n      { \"type\": \"image_url\", \"image_url\": { \"url\": \"data:\" + $json.extracted.mimeType + \";base64,\" + $json.extracted.base64 } },\n      { \"type\": \"text\", \"text\": {{ JSON.stringify($json.prompt) }} }\n    ]\n  }]\n}"
+      },
+      "id": "mistral-image",
+      "name": "🤖 Mistral (Image/Pixtral)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices?.[0]?.message?.content ?? '';\nconst promptData = $('🧠 Build Prompt Fill').first().json;\n\nconst { validPeriods, VALID_UNITS } = promptData;\n\nconst match = raw.match(/\\{[\\s\\S]*\\}/);\nlet parsed = {};\ntry { parsed = JSON.parse(match?.[0] ?? '{}'); } catch {}\n\nconst result = {\n  description: String(parsed.description ?? '').slice(0, 120),\n  quantity: Number(parsed.quantity) || 0,\n  unit: VALID_UNITS.includes(parsed.unit) ? parsed.unit : 'kWh',\n  period: validPeriods.includes(parsed.period) ? parsed.period : validPeriods[0],\n  factor_query: String(parsed.factor_query ?? '').slice(0, 80),\n};\n\nreturn [{ json: result }];"
+      },
+      "id": "parse-response",
+      "name": "✅ Parser réponse Fill",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond",
+      "name": "📤 Répondre",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 300]
+    }
+  ],
+  "connections": {
+    "📥 Webhook Fill": { "main": [[{ "node": "🔐 Auth Check", "type": "main", "index": 0 }]] },
+    "🔐 Auth Check": { "main": [[{ "node": "📋 Get Emission Posts", "type": "main", "index": 0 }]] },
+    "📋 Get Emission Posts": { "main": [[{ "node": "🔍 A-t-on un fichier?", "type": "main", "index": 0 }]] },
+    "🔍 A-t-on un fichier?": { "main": [[{ "node": "📎 Fichier ou texte?", "type": "main", "index": 0 }]] },
+    "📎 Fichier ou texte?": {
+      "main": [
+        [{ "node": "📂 Extraire texte fichier", "type": "main", "index": 0 }],
+        [{ "node": "📝 Utiliser texte direct", "type": "main", "index": 0 }]
+      ]
+    },
+    "📂 Extraire texte fichier": { "main": [[{ "node": "🧠 Build Prompt Fill", "type": "main", "index": 0 }]] },
+    "📝 Utiliser texte direct": { "main": [[{ "node": "🧠 Build Prompt Fill", "type": "main", "index": 0 }]] },
+    "🧠 Build Prompt Fill": { "main": [[{ "node": "🖼 Image ou texte?", "type": "main", "index": 0 }]] },
+    "🖼 Image ou texte?": {
+      "main": [
+        [{ "node": "🤖 Mistral (Image/Pixtral)", "type": "main", "index": 0 }],
+        [{ "node": "🤖 Mistral (Texte)", "type": "main", "index": 0 }]
+      ]
+    },
+    "🤖 Mistral (Texte)": { "main": [[{ "node": "✅ Parser réponse Fill", "type": "main", "index": 0 }]] },
+    "🤖 Mistral (Image/Pixtral)": { "main": [[{ "node": "✅ Parser réponse Fill", "type": "main", "index": 0 }]] },
+    "✅ Parser réponse Fill": { "main": [[{ "node": "📤 Répondre", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" }
+}
